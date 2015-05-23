@@ -1,5 +1,5 @@
 #!/bin/bash
-# OpenVPN road warrior installer for Debian, Ubuntu and CentOS
+# OpenVPN installer for Debian, Ubuntu and CentOS
 
 # This script will work on Debian, Ubuntu, CentOS and probably other distros
 # of the same families, although no support is offered for them. It isn't
@@ -168,15 +168,22 @@ else
 	echo ""
 	echo "What port do you want for OpenVPN?"
 	read -p "Port: " -e -i 1194 PORT
-	echo ""
-	echo "Do you want OpenVPN to be available at port 53 too?"
-	echo "This can be useful to connect under restrictive networks"
-	read -p "Listen at port 53 [y/n]: " -e -i n ALTPORT
-	echo ""
-	echo "Do you want to enable internal networking for the VPN?"
-	echo "This can allow VPN clients to communicate between them"
-	read -p "Allow internal networking [y/n]: " -e -i n INTERNALNETWORK
-	echo ""
+	echo ""	
+	echo "Route all client (internet-)traffic through the VPN?"	
+	read -p "[y/n]: " -e -i n ROUTETRAFFIC	
+	echo ""	
+	echo "Do you want to install and configure iptables?"	
+	read -p "Setup iptables [y/n]: " -e -i n IPTABLES	
+	if [[ "$IPTABLES" = 'y' ]]; then
+		echo "Do you want OpenVPN to be available at port 53 too?"
+		echo "This can be useful to connect under restrictive networks"
+		read -p "Listen at port 53 [y/n]: " -e -i n ALTPORT
+		echo ""
+		echo "Do you want to enable internal networking for the VPN?"
+		echo "This can allow VPN clients to communicate between them"
+		read -p "Allow internal networking [y/n]: " -e -i n INTERNALNETWORK
+		echo ""		
+	fi	
 	echo "What DNS do you want to use with the VPN?"
 	echo "   1) Current system resolvers"
 	echo "   2) OpenDNS"
@@ -184,7 +191,7 @@ else
 	echo "   4) NTT"
 	echo "   5) Hurricane Electric"
 	echo "   6) Yandex"
-	read -p "DNS [1-6]: " -e -i 1 DNS
+	read -p "DNS [1-6]: " -e -i 1 DNS		
 	echo ""
 	echo "Finally, tell me your name for the client cert"
 	echo "Please, use one word only, no special characters"
@@ -194,7 +201,10 @@ else
 	read -n1 -r -p "Press any key to continue..."
 	if [[ "$OS" = 'debian' ]]; then
 		apt-get update
-		apt-get install openvpn iptables openssl -y
+		apt-get install openvpn openssl -y
+		if [[ "$IPTABLES" = 'y' ]]; then
+			apt-get install iptables -y
+		fi
 		cp -R /usr/share/doc/openvpn/examples/easy-rsa/ /etc/openvpn
 		# easy-rsa isn't available by default for Debian Jessie and newer
 		if [[ ! -d /etc/openvpn/easy-rsa/2.0/ ]]; then
@@ -203,7 +213,10 @@ else
 	else
 		# Else, the distro is CentOS
 		yum install epel-release -y
-		yum install openvpn iptables openssl wget -y
+		if [[ "$IPTABLES" = 'y' ]]; then
+			yum install openvpn openssl wget -y
+			yum install iptables -y
+		fi
 		geteasyrsa
 	fi
 	cd /etc/openvpn/easy-rsa/2.0/
@@ -238,9 +251,11 @@ else
 	cp ca.crt ca.key dh2048.pem server.crt server.key /etc/openvpn
 	cd /etc/openvpn/
 	# Set the server configuration
-	sed -i 's|dh dh1024.pem|dh dh2048.pem|' server.conf
-	sed -i 's|;push "redirect-gateway def1 bypass-dhcp"|push "redirect-gateway def1 bypass-dhcp"|' server.conf
+	sed -i 's|dh dh1024.pem|dh dh2048.pem|' server.conf	
 	sed -i "s|port 1194|port $PORT|" server.conf
+	if [[ "$ROUTETRAFFIC" = 'y' ]]; then
+		sed -i 's|;push "redirect-gateway def1 bypass-dhcp"|push "redirect-gateway def1 bypass-dhcp"|' server.conf
+	fi
 	# DNS
 	case $DNS in
 		1) 
@@ -269,31 +284,33 @@ else
 		sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS 77.88.8.1"|' server.conf
 		;;
 	esac
-	# Listen at port 53 too if user wants that
-	if [[ "$ALTPORT" = 'y' ]]; then
-		iptables -t nat -A PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-port $PORT
-		sed -i "1 a\iptables -t nat -A PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-port $PORT" $RCLOCAL
-	fi
-	# Enable net.ipv4.ip_forward for the system
-	if [[ "$OS" = 'debian' ]]; then
-		sed -i 's|#net.ipv4.ip_forward=1|net.ipv4.ip_forward=1|' /etc/sysctl.conf
-	else
-		# CentOS 5 and 6
-		sed -i 's|net.ipv4.ip_forward = 0|net.ipv4.ip_forward = 1|' /etc/sysctl.conf
-		# CentOS 7
-		if ! grep -q "net.ipv4.ip_forward=1" "/etc/sysctl.conf"; then
-			echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+	if [[ "$IPTABLES" = 'y' ]]; then
+		# Listen at port 53 too if user wants that
+		if [[ "$ALTPORT" = 'y' ]]; then
+			iptables -t nat -A PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-port $PORT
+			sed -i "1 a\iptables -t nat -A PREROUTING -p udp -d $IP --dport 53 -j REDIRECT --to-port $PORT" $RCLOCAL
 		fi
-	fi
-	# Avoid an unneeded reboot
-	echo 1 > /proc/sys/net/ipv4/ip_forward
-	# Set iptables
-	if [[ "$INTERNALNETWORK" = 'y' ]]; then
-		iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
-		sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP" $RCLOCAL
-	else
-		iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -j SNAT --to $IP
-		sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -j SNAT --to $IP" $RCLOCAL
+		# Enable net.ipv4.ip_forward for the system
+		if [[ "$OS" = 'debian' ]]; then
+			sed -i 's|#net.ipv4.ip_forward=1|net.ipv4.ip_forward=1|' /etc/sysctl.conf
+		else
+			# CentOS 5 and 6
+			sed -i 's|net.ipv4.ip_forward = 0|net.ipv4.ip_forward = 1|' /etc/sysctl.conf
+			# CentOS 7
+			if ! grep -q "net.ipv4.ip_forward=1" "/etc/sysctl.conf"; then
+				echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+			fi
+		fi
+		# Avoid an unneeded reboot
+		echo 1 > /proc/sys/net/ipv4/ip_forward
+		# Set iptables
+		if [[ "$INTERNALNETWORK" = 'y' ]]; then
+			iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP
+			sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -d 10.8.0.0/24 -j SNAT --to $IP" $RCLOCAL
+		else
+			iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -j SNAT --to $IP
+			sed -i "1 a\iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -j SNAT --to $IP" $RCLOCAL
+		fi
 	fi
 	# And finally, restart OpenVPN
 	if [[ "$OS" = 'debian' ]]; then

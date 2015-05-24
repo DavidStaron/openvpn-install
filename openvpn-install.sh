@@ -88,7 +88,7 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 		echo ""
 		read -p "Select an option [1-4]: " option
 		case $option in
-			1) 
+			1)
 			echo ""
 			echo "Tell me a name for the client cert"
 			echo "Please, use one word only, no special characters"
@@ -130,7 +130,7 @@ if [[ -e /etc/openvpn/server.conf ]]; then
 			echo "Certificate for client $CLIENT revoked"
 			exit
 			;;
-			3) 
+			3)
 			echo ""
 			read -p "Do you really want to remove OpenVPN? [y/n]: " -e -i n REMOVE
 			if [[ "$REMOVE" = 'y' ]]; then
@@ -168,12 +168,24 @@ else
 	echo ""
 	echo "What port do you want for OpenVPN?"
 	read -p "Port: " -e -i 1194 PORT
-	echo ""	
-	echo "Route all client (internet-)traffic through the VPN?"	
-	read -p "[y/n]: " -e -i n ROUTETRAFFIC	
-	echo ""	
-	echo "Do you want to install and configure iptables?"	
-	read -p "Setup iptables [y/n]: " -e -i n IPTABLES	
+	echo ""
+	echo "Route all client (internet-)traffic through the VPN?"
+	read -p "[y/n]: " -e -i n ROUTETRAFFIC
+	echo ""
+	if [[ "$ROUTETRAFFIC" = 'y' ]]; then
+		echo "What DNS do you want to use with the VPN?"
+		echo "   0) Don't push any DNS to clients"
+		echo "   1) Current system resolvers"
+		echo "   2) OpenDNS"
+		echo "   3) Level 3"
+		echo "   4) NTT"
+		echo "   5) Hurricane Electric"
+		echo "   6) Yandex"
+		read -p "DNS [1-6]: " -e -i 1 DNS
+	fi
+	echo ""
+	echo "Do you want to install and configure iptables?"
+	read -p "Setup iptables [y/n]: " -e -i n IPTABLES
 	if [[ "$IPTABLES" = 'y' ]]; then
 		echo "Do you want OpenVPN to be available at port 53 too?"
 		echo "This can be useful to connect under restrictive networks"
@@ -182,16 +194,8 @@ else
 		echo "Do you want to enable internal networking for the VPN?"
 		echo "This can allow VPN clients to communicate between them"
 		read -p "Allow internal networking [y/n]: " -e -i n INTERNALNETWORK
-		echo ""		
-	fi	
-	echo "What DNS do you want to use with the VPN?"
-	echo "   1) Current system resolvers"
-	echo "   2) OpenDNS"
-	echo "   3) Level 3"
-	echo "   4) NTT"
-	echo "   5) Hurricane Electric"
-	echo "   6) Yandex"
-	read -p "DNS [1-6]: " -e -i 1 DNS		
+		echo ""
+	fi
 	echo ""
 	echo "Finally, tell me your name for the client cert"
 	echo "Please, use one word only, no special characters"
@@ -251,39 +255,41 @@ else
 	cp ca.crt ca.key dh2048.pem server.crt server.key /etc/openvpn
 	cd /etc/openvpn/
 	# Set the server configuration
-	sed -i 's|dh dh1024.pem|dh dh2048.pem|' server.conf	
+	sed -i 's|dh dh1024.pem|dh dh2048.pem|' server.conf
 	sed -i "s|port 1194|port $PORT|" server.conf
 	if [[ "$ROUTETRAFFIC" = 'y' ]]; then
 		sed -i 's|;push "redirect-gateway def1 bypass-dhcp"|push "redirect-gateway def1 bypass-dhcp"|' server.conf
+
+		# DNS
+		case $DNS in
+			1)
+			# Obtain the resolvers from resolv.conf and use them for OpenVPN
+			grep -v '#' /etc/resolv.conf | grep 'nameserver' | grep -E -o '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | while read line; do
+				sed -i "/;push \"dhcp-option DNS 208.67.220.220\"/a\push \"dhcp-option DNS $line\"" server.conf
+			done
+			;;
+			2)
+			sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 208.67.222.222"|' server.conf
+			sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS 208.67.220.220"|' server.conf
+			;;
+			3)
+			sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 4.2.2.2"|' server.conf
+			sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS 4.2.2.4"|' server.conf
+			;;
+			4)
+			sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 129.250.35.250"|' server.conf
+			sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS 129.250.35.251"|' server.conf
+			;;
+			5)
+			sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 74.82.42.42"|' server.conf
+			;;
+			6)
+			sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 77.88.8.8"|' server.conf
+			sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS 77.88.8.1"|' server.conf
+			;;
+		esac
 	fi
-	# DNS
-	case $DNS in
-		1) 
-		# Obtain the resolvers from resolv.conf and use them for OpenVPN
-		grep -v '#' /etc/resolv.conf | grep 'nameserver' | grep -E -o '[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}' | while read line; do
-			sed -i "/;push \"dhcp-option DNS 208.67.220.220\"/a\push \"dhcp-option DNS $line\"" server.conf
-		done
-		;;
-		2)
-		sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 208.67.222.222"|' server.conf
-		sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS 208.67.220.220"|' server.conf
-		;;
-		3) 
-		sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 4.2.2.2"|' server.conf
-		sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS 4.2.2.4"|' server.conf
-		;;
-		4) 
-		sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 129.250.35.250"|' server.conf
-		sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS 129.250.35.251"|' server.conf
-		;;
-		5) 
-		sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 74.82.42.42"|' server.conf
-		;;
-		6) 
-		sed -i 's|;push "dhcp-option DNS 208.67.222.222"|push "dhcp-option DNS 77.88.8.8"|' server.conf
-		sed -i 's|;push "dhcp-option DNS 208.67.220.220"|push "dhcp-option DNS 77.88.8.1"|' server.conf
-		;;
-	esac
+	#iptables
 	if [[ "$IPTABLES" = 'y' ]]; then
 		# Listen at port 53 too if user wants that
 		if [[ "$ALTPORT" = 'y' ]]; then
